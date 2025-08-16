@@ -1,6 +1,5 @@
 import pygame
 import math
-import random
 import sys
 import time
 pygame.joystick.init()
@@ -61,20 +60,43 @@ class Track:
             2: {"color": (200, 200, 0), "name": "yellow", "friction": 0.06, "vibration": (0.5, 0.5)},
             3: {"color": (200, 0, 0), "name": "red", "friction": 0.08, "vibration": (1.0, 1.0)}
         }
-        self.generate_track()
-    def generate_track(self):
+        self.load_track()
+    def load_track(self):
+        try:
+            with open('track.txt', 'r') as f:
+                self.track = []
+                for line in f:
+                    row = [int(x) for x in line.strip().split()]
+                    self.track.append(row)
+                print("Трасса загружена из файла")
+        except FileNotFoundError:
+            self.generate_default_track()
+            print("Создана новая трасса")
+    def generate_default_track(self):
         self.track = []
         for y in range(self.height // 32):
             row = []
             for x in range(self.width // 32):
                 if x < 5 or x > (self.width // 32) - 5:
                     surface_type = 0  
-                elif y % 10 < 3:
-                    surface_type = random.choice([1, 2, 3])  
                 else:
-                    surface_type = random.choice([0, 0, 0, 1])  
+                    surface_type = 0  
                 row.append(surface_type)
             self.track.append(row)
+    def save_track(self):
+        try:
+            with open('track.txt', 'w') as f:
+                for row in self.track:
+                    f.write(' '.join(map(str, row)) + '\n')
+            print("Трасса сохранена в файл")
+        except Exception as e:
+            print(f"Ошибка сохранения: {e}")
+    def set_surface_at(self, x, y, surface_type):
+        grid_x = int(x // 32)
+        grid_y = int(y // 32)
+        if (0 <= grid_x < len(self.track[0]) and 
+            0 <= grid_y < len(self.track)):
+            self.track[grid_y][grid_x] = surface_type
     def get_surface_at(self, x, y):
         grid_x = int(x // 32)
         grid_y = int(y // 32)
@@ -173,6 +195,9 @@ class Game:
         self.current_vibration = (0, 0)
         self.last_surface_type = 0
         self.keys_pressed = pygame.key.get_pressed()
+        self.edit_mode = False
+        self.selected_surface = 0
+        self.mouse_pressed = False
     def handle_input(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -180,6 +205,28 @@ class Game:
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
                     self.restart_game()
+                elif event.key == pygame.K_e:
+                    self.edit_mode = not self.edit_mode
+                    if self.edit_mode:
+                        print("Режим редактирования включен")
+                    else:
+                        print("Режим редактирования выключен")
+                elif event.key == pygame.K_s and self.edit_mode:
+                    self.track.save_track()
+                elif event.key in [pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4] and self.edit_mode:
+                    self.selected_surface = event.key - pygame.K_1
+                    print(f"Выбран тип поверхности: {self.selected_surface}")
+            elif event.type == pygame.MOUSEBUTTONDOWN and self.edit_mode:
+                if event.button == 1:  
+                    self.mouse_pressed = True
+            elif event.type == pygame.MOUSEBUTTONUP and self.edit_mode:
+                if event.button == 1:  
+                    self.mouse_pressed = False
+        if self.edit_mode and self.mouse_pressed:
+            mouse_x, mouse_y = pygame.mouse.get_pos()
+            world_x = mouse_x + self.camera_x
+            world_y = mouse_y + self.camera_y
+            self.track.set_surface_at(world_x, world_y, self.selected_surface)
         gas, turn, restart_button = self.controller.get_input()
         if restart_button:
             self.restart_game()
@@ -194,18 +241,27 @@ class Game:
         return gas, turn
     def update(self):
         gas, turn = self.handle_input()
-        surface_type = self.track.get_surface_at(self.player.x, self.player.y)
-        surface_info = self.track.surface_types[surface_type]
-        if surface_type != self.last_surface_type:
-            self.player.bounce()
-            self.last_surface_type = surface_type
-        self.player.update(gas, turn, surface_info["friction"])
-        vibration = surface_info["vibration"]
-        if vibration != self.current_vibration:
-            self.controller.set_vibration(vibration[0], vibration[1])
-            self.current_vibration = vibration
-        self.camera_x = self.player.x - self.screen_width // 2
-        self.camera_y = self.player.y - self.screen_height // 2
+        if not self.edit_mode:
+            surface_type = self.track.get_surface_at(self.player.x, self.player.y)
+            surface_info = self.track.surface_types[surface_type]
+            if surface_type != self.last_surface_type:
+                self.player.bounce()
+                self.last_surface_type = surface_type
+            self.player.update(gas, turn, surface_info["friction"])
+            vibration = surface_info["vibration"]
+            if vibration != self.current_vibration:
+                self.controller.set_vibration(vibration[0], vibration[1])
+                self.current_vibration = vibration
+        else:
+            keys = pygame.key.get_pressed()
+            if keys[pygame.K_LEFT] or keys[pygame.K_a]:
+                self.camera_x -= 10
+            if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
+                self.camera_x += 10
+            if keys[pygame.K_UP] or keys[pygame.K_w]:
+                self.camera_y -= 10
+            if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+                self.camera_y += 10
         self.camera_x = max(0, min(self.camera_x, self.track.width - self.screen_width))
         self.camera_y = max(0, min(self.camera_y, self.track.height - self.screen_height))
         distance = math.sqrt(self.player.x**2 + self.player.y**2)
@@ -214,7 +270,8 @@ class Game:
         self.screen.fill((20, 20, 20))
         self.track.draw(self.screen, self.camera_x, self.camera_y, 
                        self.screen_width, self.screen_height)
-        self.player.draw(self.screen, self.camera_x, self.camera_y)
+        if not self.edit_mode:
+            self.player.draw(self.screen, self.camera_x, self.camera_y)
         self.draw_ui()
         pygame.display.flip()
     def draw_ui(self):
@@ -226,27 +283,43 @@ class Game:
             ("Красная - сильная вибрация", (200, 0, 0))
         ]
         for i, (text, color) in enumerate(legend_texts):
+            if self.edit_mode and i == self.selected_surface:
+                pygame.draw.rect(self.screen, (255, 255, 255), (8, legend_y + i * 25 - 2, 19, 19), 2)
             pygame.draw.rect(self.screen, color, (10, legend_y + i * 25, 15, 15))
             legend_surface = self.small_font.render(text, True, (255, 255, 255))
             self.screen.blit(legend_surface, (30, legend_y + i * 25))
-        if self.controller.connected:
+        if self.edit_mode:
             controls_text = [
-                "RT - Газ",
-                "Левый стик - Поворот",
-                "A - Рестарт"
+                "E - Выйти из режима редактирования",
+                "1-4 - Выбрать тип поверхности",
+                "Мышь - Рисовать на трассе",
+                "Стрелки - Перемещать камеру",
+                "S - Сохранить трассу"
             ]
         else:
-            controls_text = [
-                "W/↑ - Газ",
-                "A/D, ←/→ - Поворот",
-                "R - Рестарт"
-            ]
+            if self.controller.connected:
+                controls_text = [
+                    "RT - Газ",
+                    "Левый стик - Поворот",
+                    "A - Рестарт",
+                    "E - Режим редактирования"
+                ]
+            else:
+                controls_text = [
+                    "W/↑ - Газ",
+                    "A/D, ←/→ - Поворот",
+                    "R - Рестарт",
+                    "E - Режим редактирования"
+                ]
         for i, text in enumerate(controls_text):
             control_surface = self.small_font.render(text, True, (200, 200, 200))
-            self.screen.blit(control_surface, (10, self.screen_height - 80 + i * 20))
+            self.screen.blit(control_surface, (10, self.screen_height - 120 + i * 20))
+        if self.edit_mode:
+            mode_text = self.font.render("РЕЖИМ РЕДАКТИРОВАНИЯ", True, (255, 255, 0))
+            self.screen.blit(mode_text, (self.screen_width - 300, 10))
     def restart_game(self):
         self.player = Player(200, 200)
-        self.track = Track(3200, 2400)
+        self.track = Track(3200, 2400)  
         self.score = 0
         self.start_time = time.time()
         self.controller.set_vibration(0, 0)
